@@ -487,6 +487,16 @@ func (r *Record) Clone() Record {
 	return res
 }
 
+// SetAttributeLimits sets the attribute count limit and the attribute value length
+// limit that AddAttributes and SetAttributes apply to this record. A negative value
+// means no limit. Records created by a Logger carry the provider limits; a Record
+// built as a zero value carries limits of 0, which would drop every attribute and
+// empty every string value. Callers that construct records directly set them here.
+func (r *Record) SetAttributeLimits(countLimit, valueLengthLimit int) {
+	r.attributeCountLimit = countLimit
+	r.attributeValueLengthLimit = valueLengthLimit
+}
+
 func (r *Record) applyAttrLimitsAndDedup(attr log.KeyValue) log.KeyValue {
 	attr.Value = r.applyValueLimitsAndDedup(attr.Value)
 	return attr

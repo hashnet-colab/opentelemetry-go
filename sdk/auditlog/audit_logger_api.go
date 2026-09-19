@@ -124,6 +124,52 @@ func (l *auditLogger) EmitWithResult(ctx context.Context, record AuditRecord) Au
 		}
 		return result
 	}
+	// The wire record is assembled first and signed as it will travel: a Tier-2 verifier
+	// canonicalizes the record it receives, so the emitter must sign exactly that form,
+	// with the audit.* attributes present and the observed timestamp set.
+	otelRecord := record.Record.Clone()
+	otelRecord.SetAttributeLimits(-1, -1) // a zero-value Record would empty every string attribute
+	prepareAuditLogRecord(&otelRecord)
+	if otelRecord.ObservedTimestamp().IsZero() {
+		otelRecord.SetObservedTimestamp(time.Now())
+	}
+	record.SetObservedTimestamp(otelRecord.ObservedTimestamp())
+	warnAuditRecordTimestampSkew(record, defaultAuditTimestampSkew)
+	otelRecord.SetEventName(record.EventName)
+	targetID, targetType := auditTargetFields(record)
+	auditAttrs := []log.KeyValue{
+		log.KeyValue{Key: auditAttrActor, Value: record.Actor},
+		log.String(auditAttrActorType, record.ActorType),
+		log.String(auditAttrAction, record.Action),
+		log.String(auditAttrOutcome, record.Outcome),
+	}
+	if targetID != "" {
+		auditAttrs = append(auditAttrs, log.String(auditAttrTargetID, targetID))
+	}
+	if targetType != "" {
+		auditAttrs = append(auditAttrs, log.String(auditAttrTargetType, targetType))
+	}
+	if record.SchemaVersion != "" {
+		auditAttrs = append(auditAttrs, log.String(auditAttrSchemaVersion, record.SchemaVersion))
+	}
+	if !auditRecordIDAttrMatches(otelRecord, record.RecordID) {
+		auditAttrs = append(auditAttrs, log.String(auditAttrRecordID, record.RecordID))
+	}
+	otelRecord.AddAttributes(auditAttrs...)
+	if record.SourceIP != "" {
+		otelRecord.AddAttributes(log.String(auditAttrSourceID, record.SourceIP))
+	}
+	if record.SequenceNo > 0 {
+		otelRecord.AddAttributes(log.Int64(auditAttrSequenceNo, record.SequenceNo))
+	}
+	if record.PrevHash != "" {
+		otelRecord.AddAttributes(log.String(auditAttrPrevHash, record.PrevHash))
+	}
+	if record.SourceType != "" {
+		otelRecord.AddAttributes(log.String(auditAttrSourceType, record.SourceType))
+	}
+	record.Record = otelRecord.Clone()
+
 	record, err := l.provider.enrichIntegrity(ctx, record)
 	if err != nil {
 		result.StatusCode, result.Status, result.Reason = mapAuditError(
@@ -149,54 +195,14 @@ func (l *auditLogger) EmitWithResult(ctx context.Context, record AuditRecord) Au
 		result.StatusCode, result.Status, result.Reason = mapAuditError(err)
 		return result
 	}
-	otelRecord := record.Record.Clone()
-	prepareAuditLogRecord(&otelRecord)
-	if otelRecord.ObservedTimestamp().IsZero() {
-		otelRecord.SetObservedTimestamp(time.Now())
-	}
-	record.SetObservedTimestamp(otelRecord.ObservedTimestamp())
-	warnAuditRecordTimestampSkew(record, defaultAuditTimestampSkew)
-	otelRecord.SetEventName(record.EventName)
 	res, err := l.provider.auditResourceForRecord(record)
 	if err != nil {
 		result.StatusCode, result.Status, result.Reason = mapAuditError(err)
 		return result
 	}
 	otelRecord.SetResource(res)
-	targetID, targetType := auditTargetFields(record)
-	auditAttrs := []log.KeyValue{
-		log.KeyValue{Key: auditAttrActor, Value: record.Actor},
-		log.String(auditAttrActorType, record.ActorType),
-		log.String(auditAttrAction, record.Action),
-		log.String(auditAttrOutcome, record.Outcome),
-	}
-	if targetID != "" {
-		auditAttrs = append(auditAttrs, log.String(auditAttrTargetID, targetID))
-	}
-	if targetType != "" {
-		auditAttrs = append(auditAttrs, log.String(auditAttrTargetType, targetType))
-	}
-	if record.SchemaVersion != "" {
-		auditAttrs = append(auditAttrs, log.String(auditAttrSchemaVersion, record.SchemaVersion))
-	}
-	if !auditRecordIDAttrMatches(otelRecord, record.RecordID) {
-		auditAttrs = append(auditAttrs, log.String(auditAttrRecordID, record.RecordID))
-	}
-	otelRecord.AddAttributes(auditAttrs...)
-	if record.SourceIP != "" {
-		otelRecord.AddAttributes(log.String(auditAttrSourceID, record.SourceIP))
-	}
 	if l.provider.exportIntegrity.AnySet() && record.IntegrityValue != "" {
 		otelRecord.AddAttributes(log.String(auditAttrIntegrityValue, record.IntegrityValue))
-	}
-	if record.SequenceNo > 0 {
-		otelRecord.AddAttributes(log.Int64(auditAttrSequenceNo, record.SequenceNo))
-	}
-	if record.PrevHash != "" {
-		otelRecord.AddAttributes(log.String(auditAttrPrevHash, record.PrevHash))
-	}
-	if record.SourceType != "" {
-		otelRecord.AddAttributes(log.String(auditAttrSourceType, record.SourceType))
 	}
 	queuedAt := time.Now().UTC()
 	for _, p := range l.provider.processors {
