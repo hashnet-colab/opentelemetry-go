@@ -95,8 +95,12 @@ func jcsCanonicalAuditRecord(record AuditRecord) ([]byte, error) {
 	if record.SourceType != "" {
 		payload["audit.source.type"] = record.SourceType
 	}
-	if body := record.Body().String(); body != "" {
-		payload["body"] = body
+	// An empty body is absent from the payload: Value.String() renders an empty value as
+	// "<nil>", which a verifier reading the exported record never sees.
+	if record.Body().Kind() != log.KindEmpty {
+		if body := record.Body().String(); body != "" {
+			payload["body"] = body
+		}
 	}
 	if record.SchemaVersion != "" {
 		payload["audit.schema.version"] = record.SchemaVersion
@@ -126,7 +130,11 @@ func collectNonIntegrityAttributes(record AuditRecord) []jcsAttr {
 		if isIntegrityAttributeKey(key) || key == auditAttrSignContent {
 			return true
 		}
-		attrs = append(attrs, jcsAttr{Key: key, Value: kv.Value.String()})
+		value := ""
+		if kv.Value.Kind() != log.KindEmpty {
+			value = kv.Value.String()
+		}
+		attrs = append(attrs, jcsAttr{Key: key, Value: value})
 		return true
 	})
 	return attrs
