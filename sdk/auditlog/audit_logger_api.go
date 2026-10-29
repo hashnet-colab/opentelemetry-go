@@ -256,6 +256,11 @@ func (l *auditLogger) EmitWithResult(ctx context.Context, record AuditRecord) Au
 		result.StatusCode = 202
 		result.Status = "queued"
 		result.QueuedAt = queuedAt
+		// the record's integrity hash is known once it is signed; a caller that exports records itself, many per
+		// request, chains the next record to it (the same local hash the waiting path falls back to)
+		if hash, err := integrityHashForAuditRecord(record); err == nil {
+			result.Hash = hash
+		}
 	}
 	return result
 }
